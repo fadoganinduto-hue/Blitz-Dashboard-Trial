@@ -12,7 +12,7 @@ st.set_page_config(
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.title("🚀 Blitz Operations Dashboard")
-st.caption("Weekly P&L and operations tracker. Upload your latest Excel file to refresh all views.")
+st.caption("Weekly P&L and operations tracker. Upload your Raw Data Source sheet every Thursday to refresh all views.")
 
 st.divider()
 
@@ -21,9 +21,13 @@ with st.container():
     col_upload, col_status = st.columns([2, 1])
     with col_upload:
         uploaded = st.file_uploader(
-            "**Upload data file** (W38 Data Collection .xlsx)",
+            "**Upload data file** — Raw Data Source export (.xlsx)",
             type=['xlsx'],
-            help="Upload the master Excel file. All pages will update automatically.",
+            help=(
+                "Upload either:\n"
+                "• The Raw Data Source tab exported as its own .xlsx file (recommended weekly workflow)\n"
+                "• The full workbook — also works, and additionally loads Action Items"
+            ),
             label_visibility="visible"
         )
 
@@ -126,18 +130,20 @@ else:
     # ── Placeholder when no file is loaded ───────────────────────────────────
     st.markdown("""
     ### Getting started
-    1. Upload the **W38 Data Collection .xlsx** file using the uploader above.
-    2. Navigate between pages using the **sidebar** on the left.
-    3. Use the **filters** on each page to slice by year, team, month, and more.
 
-    #### Pages available
-    | Page | What it shows |
-    |------|--------------|
-    | 📊 Overview | Revenue, cost, GP trend by week/month |
-    | 👥 By Client | Per-client P&L, drilldown, unit economics |
-    | 🗺️ By Location | Location ranking + week-over-week variance |
-    | 🏙️ By Team | Jakarta vs. Surabaya comparison |
-    | ⚡ EV Rental | EV business line — units, revenue, OEM/IoT costs |
-    | 📋 Action Items | Client management tracker |
-    | 📈 Finance Check | Year-over-year comparison + anomaly flags |
+    **Weekly workflow (every Thursday):**
+    1. In your Excel file, right-click the **Raw Data Source** tab → **Move or Copy** → tick **Create a copy** → **New book** → Save as `.xlsx`
+    2. Upload that file using the uploader above
+    3. All pages refresh instantly — no pivot tables, no waiting
+
+    #### Pages & data requirements
+    | Page | Raw Data Source only | Full workbook needed |
+    |------|:--------------------:|:--------------------:|
+    | 📊 Overview | ✅ | — |
+    | 👥 By Client | ✅ | — |
+    | 🗺️ By Location | ✅ | — |
+    | 🏙️ By Team | ✅ | — |
+    | ⚡ EV Rental | ✅ | — |
+    | 📈 Finance Check | ✅ | — |
+    | 📋 Action Items | — | ✅ (qualitative tab) |
     """)
