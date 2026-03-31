@@ -55,6 +55,93 @@ def require_data() -> pd.DataFrame:
     return st.session_state.data.copy()
 
 
+# ── Period helpers ────────────────────────────────────────────────────────────
+def get_available_periods(df: pd.DataFrame, mode: str) -> list[tuple]:
+    """Return sorted list of (year, period_val, label) tuples.
+
+    For Weekly: period_val is int week number.
+    For Monthly: period_val is str month name.
+    """
+    if mode == "Weekly":
+        groups = (
+            df.groupby(['Year', 'Week (by Year)'], observed=True)
+            .size().reset_index()
+            .sort_values(['Year', 'Week (by Year)'])
+        )
+        return [
+            (int(r['Year']), int(r['Week (by Year)']),
+             f"{int(r['Year'])} W{int(r['Week (by Year)'])}")
+            for _, r in groups.iterrows()
+        ]
+    else:
+        groups = (
+            df.groupby(['Year', 'Month'], observed=True)
+            .size().reset_index()
+        )
+        groups['Month'] = pd.Categorical(groups['Month'], categories=MONTH_ORDER, ordered=True)
+        groups = groups.sort_values(['Year', 'Month'])
+        return [
+            (int(r['Year']), str(r['Month']), f"{int(r['Year'])} {r['Month']}")
+            for _, r in groups.iterrows()
+        ]
+
+
+def filter_period(df: pd.DataFrame, mode: str, year: int, period_val) -> pd.DataFrame:
+    """Filter df to a specific period."""
+    if mode == "Weekly":
+        return df[(df['Year'] == year) & (df['Week (by Year)'] == int(period_val))]
+    else:
+        return df[(df['Year'] == year) & (df['Month'] == str(period_val))]
+
+
+def prev_period_info(periods: list[tuple], year: int, period_val) -> tuple | None:
+    """Given a sorted periods list, return the period immediately before (year, period_val)."""
+    keys = [(p[0], p[1]) for p in periods]
+    try:
+        idx = keys.index((year, period_val))
+        if idx > 0:
+            return periods[idx - 1]
+    except ValueError:
+        pass
+    return None
+
+
+def pop_pct(curr_val: float, prev_val: float) -> float | None:
+    """Period-over-period % change. Returns None if no meaningful prior value."""
+    if pd.isna(prev_val) or prev_val == 0:
+        return None
+    return (curr_val - prev_val) / abs(prev_val) * 100
+
+
+def pop_label(mode: str) -> str:
+    """Short period-over-period abbreviation: WoW or MoM."""
+    return "WoW" if mode == "Weekly" else "MoM"
+
+
+def build_trend(df: pd.DataFrame, group_cols: list[str], mode: str) -> pd.DataFrame:
+    """Aggregate df by period for trend charts. Returns df with a 'Label' column."""
+    if mode == "Weekly":
+        trend = (
+            df.groupby(['Year', 'Week (by Year)'] + group_cols, observed=True)
+            .agg(Revenue=('Total Revenue', 'sum'), Cost=('Total Cost', 'sum'),
+                 GP=('GP', 'sum'), Volume=('Delivery Volume', 'sum'))
+            .reset_index().sort_values(['Year', 'Week (by Year)'])
+        )
+        trend['Label'] = (trend['Year'].astype(str) + ' W' +
+                          trend['Week (by Year)'].astype(int).astype(str))
+    else:
+        trend = (
+            df.groupby(['Year', 'Month'] + group_cols, observed=True)
+            .agg(Revenue=('Total Revenue', 'sum'), Cost=('Total Cost', 'sum'),
+                 GP=('GP', 'sum'), Volume=('Delivery Volume', 'sum'))
+            .reset_index()
+        )
+        trend['Month'] = pd.Categorical(trend['Month'], categories=MONTH_ORDER, ordered=True)
+        trend = trend.sort_values(['Year', 'Month'])
+        trend['Label'] = trend['Year'].astype(str) + ' ' + trend['Month'].astype(str)
+    return trend
+
+
 # ── Sidebar filters ───────────────────────────────────────────────────────────
 def sidebar_filters(df: pd.DataFrame, page_key: str = "") -> pd.DataFrame:
     """Render sidebar filters and return the filtered dataframe."""
