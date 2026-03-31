@@ -1,0 +1,59 @@
+======================================================
+  BLITZ DASHBOARD — SETUP & DEPLOYMENT GUIDE
+======================================================
+
+-----------------------------------------
+OPTION A: RUN LOCALLY (Recommended first)
+-----------------------------------------
+
+1. Install Python 3.10+ if not already installed
+   → https://www.python.org/downloads/
+
+2. Open Terminal / Command Prompt, navigate to this folder:
+   cd "Blitz Dashboard"
+
+3. Install dependencies:
+   pip install -r requirements.txt
+
+4. Run the app:
+   streamlit run Home.py
+
+5. Your browser will open at: http://localhost:8501
+   Share on your local network at: http://YOUR_IP:8501
+
+--------------------------------------------------
+OPTION B: DEPLOY TO STREAMLIT COMMUNITY CLOUD (Free, shareable URL)
+--------------------------------------------------
+
+1. Create a free GitHub account at https://github.com
+2. Create a new repository (e.g. "blitz-dashboard"), upload all files in this folder
+3. Go to https://share.streamlit.io and sign in with GitHub
+4. Click "New app" → select your repo → set Main file = Home.py
+5. Click Deploy — your app will be live at:
+   https://your-repo-name.streamlit.app
+
+Anyone with the link can access it. No login required by default.
+
+--------------------------------------------------
+WEEKLY UPDATE WORKFLOW
+--------------------------------------------------
+
+1. Update your Excel file as usual (add new week's data to Raw Data Source)
+2. Open the Streamlit app in your browser
+3. Click "Browse files" on the Home page, select your Excel file
+4. All 7 pages update instantly — no pivot refresh needed
+
+--------------------------------------------------
+PAGES IN THE APP
+--------------------------------------------------
+
+Home           — File upload + automatic weekly insights
+📊 Overview    — Revenue, cost, GP trend by week/month
+👥 By Client   — Per-client P&L, drilldown, unit economics
+🗺️ By Location — Location ranking + week-over-week variance
+🏙️ By Team     — Jakarta vs. Surabaya comparison
+⚡ EV Rental   — EV business line (units, OEM, IoT costs)
+📋 Action Items — Client management tracker
+📈 Finance Check — Year-over-year comparison + anomaly flags
+
+======================================================
