@@ -2,156 +2,176 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from utils import require_data, fmt_idr, fmt_pct, fmt_vol, C_REVENUE, C_COST, C_GP, MONTH_ORDER
+from utils import (require_data, sidebar_filters, fmt_idr, fmt_pct, fmt_vol,
+                   C_REVENUE, C_COST, C_GP, MONTH_ORDER)
+from data_loader import COST_COMPONENTS
 
 st.set_page_config(page_title="EV Rental | Blitz", page_icon="⚡", layout="wide")
 st.title("⚡ EV Rental")
-st.caption("Electric vehicle rental business line — units, revenue, and cost breakdown.")
+st.caption("Electric vehicle rental business line — revenue, cost, and GP from Raw Data Source.")
 
-# Load EV-specific data
-if 'ev_data' not in st.session_state or st.session_state['ev_data'] is None:
-    # Fallback: filter main data for EV rental clients
-    df_main = require_data()
-    ev_clients = df_main[df_main['Client Name'].str.contains('EV Rental', na=False)].copy()
-    use_test_tab = False
-else:
-    ev_df = st.session_state['ev_data'].copy()
-    use_test_tab = True
+df_full = require_data()
+
+# ── Filter to EV Rental clients only ─────────────────────────────────────────
+ev_mask = df_full['Client Name'].str.contains('EV Rental', na=False)
+ev_full = df_full[ev_mask].copy()
+
+if ev_full.empty:
+    st.warning("No EV Rental clients found in the data. Ensure client names contain 'EV Rental'.")
+    st.stop()
 
 # ── Sidebar filters ───────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("🔍 Filters")
+    years = sorted(ev_full['Year'].dropna().unique().tolist())
+    sel_years = st.multiselect("Year", years, default=[max(years)], key="ev_year")
 
-if use_test_tab:
-    df = ev_df.copy()
-
-    with st.sidebar:
-        years = sorted(df['Year'].dropna().unique().tolist()) if 'Year' in df.columns else []
-        if years:
-            sel_years = st.multiselect("Year", years, default=[max(years)], key="ev_year")
-            df = df[df['Year'].isin(sel_years)] if sel_years else df
-
-        clients = sorted(df['Client Name'].dropna().unique().tolist()) if 'Client Name' in df.columns else []
-        sel_clients = st.multiselect("EV Client", clients, default=clients, key="ev_client")
-        if sel_clients:
-            df = df[df['Client Name'].isin(sel_clients)]
-
-    if df.empty:
-        st.warning("No data matches the current filters.")
-        st.stop()
-
-    # ── KPIs ──────────────────────────────────────────────────────────────────
-    total_units = df['Unit'].sum() if 'Unit' in df.columns else 0
-    total_rev   = df['Total Revenue'].sum() if 'Total Revenue' in df.columns else 0
-    total_cost  = df['Total Cost'].sum()    if 'Total Cost'    in df.columns else 0
-    total_gp    = df['GP'].sum()            if 'GP'            in df.columns else 0
-    gp_margin   = total_gp / total_rev * 100 if total_rev else 0
-
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Total Units",  fmt_vol(total_units))
-    k2.metric("Revenue",      fmt_idr(total_rev))
-    k3.metric("Total Cost",   fmt_idr(total_cost))
-    k4.metric("Gross Profit", fmt_idr(total_gp))
-    k5.metric("GP Margin",    fmt_pct(gp_margin))
-
+    clients = sorted(ev_full['Client Name'].dropna().unique().tolist())
+    sel_clients = st.multiselect("EV Client", clients, default=clients, key="ev_client")
     st.divider()
+    st.caption("Leave blank to include all.")
 
-    # ── Revenue vs cost by client ─────────────────────────────────────────────
-    st.subheader("Revenue & GP by EV Client")
+df = ev_full.copy()
+if sel_years:
+    df = df[df['Year'].isin(sel_years)]
+if sel_clients:
+    df = df[df['Client Name'].isin(sel_clients)]
 
-    if 'Client Name' in df.columns:
-        client_agg = (
-            df.groupby('Client Name', observed=True)
-            .agg(Units=('Unit', 'sum') if 'Unit' in df.columns else ('Total Revenue', 'count'),
-                 Revenue=('Total Revenue', 'sum'),
-                 Cost=('Total Cost', 'sum'),
-                 GP=('GP', 'sum'))
-            .reset_index()
-            .sort_values('GP', ascending=False)
-        )
-        client_agg['GP Margin %'] = client_agg.apply(
-            lambda r: r['GP'] / r['Revenue'] * 100 if r['Revenue'] else 0, axis=1
-        )
+if df.empty:
+    st.warning("No data matches the current filters.")
+    st.stop()
 
-        fig_cl = px.bar(client_agg, x='Client Name', y=['Revenue', 'Cost', 'GP'],
-                        barmode='group', color_discrete_map={'Revenue': C_REVENUE, 'Cost': C_COST, 'GP': C_GP},
-                        template='plotly_white', height=400,
-                        title="Revenue, Cost & GP by EV Rental Client")
-        fig_cl.update_layout(hovermode='x unified', legend=dict(orientation='h', y=1.05))
-        st.plotly_chart(fig_cl, use_container_width=True)
+# ── Top KPIs ──────────────────────────────────────────────────────────────────
+total_rev  = df['Total Revenue'].sum()
+total_cost = df['Total Cost'].sum()
+total_gp   = df['GP'].sum()
+gp_margin  = total_gp / total_rev * 100 if total_rev else 0
+ev_rev     = df['EV Revenue + Battery (Rental Client)'].sum()
 
-    st.divider()
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("EV Revenue",         fmt_idr(ev_rev))
+k2.metric("Total Revenue",      fmt_idr(total_rev))
+k3.metric("Total Cost",         fmt_idr(total_cost))
+k4.metric("Gross Profit",       fmt_idr(total_gp))
+k5.metric("GP Margin",          fmt_pct(gp_margin))
 
-    # ── Cost breakdown: OEM / Insurance / IoT ────────────────────────────────
-    st.subheader("Cost Component Breakdown")
+st.divider()
 
-    cost_cols = [c for c in ['OEM Cost', 'Insurance Cost', 'IOT Cost'] if c in df.columns]
-    if cost_cols and 'Client Name' in df.columns:
-        cost_agg = df.groupby('Client Name', observed=True)[cost_cols].sum().reset_index()
-        cost_long = cost_agg.melt(id_vars='Client Name', var_name='Component', value_name='Amount')
+# ── Revenue & GP by client ────────────────────────────────────────────────────
+st.subheader("Revenue & GP by EV Client")
 
-        fig_comp = px.bar(cost_long, x='Client Name', y='Amount', color='Component',
-                          barmode='stack', template='plotly_white', height=380,
-                          title="OEM / Insurance / IoT Cost per Client",
-                          labels={'Amount': 'IDR'})
-        fig_comp.update_layout(hovermode='x unified', legend=dict(orientation='h', y=1.05))
-        st.plotly_chart(fig_comp, use_container_width=True)
+client_agg = (
+    df.groupby('Client Name', observed=True)
+    .agg(Revenue=('Total Revenue', 'sum'),
+         Cost=('Total Cost', 'sum'),
+         GP=('GP', 'sum'),
+         EV_Rev=('EV Revenue + Battery (Rental Client)', 'sum'),
+         EV_Red=('EV Reduction (3PL & KSJ)', 'sum'))
+    .reset_index()
+    .sort_values('GP', ascending=False)
+)
+client_agg['GP Margin %'] = client_agg.apply(
+    lambda r: r['GP'] / r['Revenue'] * 100 if r['Revenue'] else 0, axis=1
+)
 
-    st.divider()
+fig_cl = px.bar(
+    client_agg, x='Client Name', y=['Revenue', 'Cost', 'GP'],
+    barmode='group',
+    color_discrete_map={'Revenue': C_REVENUE, 'Cost': C_COST, 'GP': C_GP},
+    template='plotly_white', height=400,
+    title="Revenue, Cost & GP by EV Rental Client"
+)
+fig_cl.update_layout(hovermode='x unified', legend=dict(orientation='h', y=1.05),
+                     xaxis_tickangle=-20)
+st.plotly_chart(fig_cl, use_container_width=True)
 
-    # ── Weekly units trend ────────────────────────────────────────────────────
-    st.subheader("Units Rented — Weekly Trend")
+# Summary table
+disp = client_agg.copy()
+disp['EV Revenue']  = disp['EV_Rev'].apply(fmt_idr)
+disp['EV Reduction']= disp['EV_Red'].apply(fmt_idr)
+disp['Total Rev']   = disp['Revenue'].apply(fmt_idr)
+disp['Cost']        = disp['Cost'].apply(fmt_idr)
+disp['GP']          = disp['GP'].apply(fmt_idr)
+disp['Margin']      = disp['GP Margin %'].apply(fmt_pct)
+st.dataframe(
+    disp[['Client Name', 'EV Revenue', 'EV Reduction', 'Total Rev', 'Cost', 'GP', 'Margin']],
+    use_container_width=True, hide_index=True
+)
 
-    if 'Week (by Year)' in df.columns and 'Unit' in df.columns:
-        weekly_ev = (
-            df.groupby(['Year', 'Week (by Year)', 'Client Name'], observed=True)['Unit']
-            .sum().reset_index()
-            .sort_values(['Year', 'Week (by Year)'])
-        )
-        weekly_ev['Label'] = (weekly_ev['Year'].astype(str) + ' W' +
-                              weekly_ev['Week (by Year)'].astype(str))
+st.divider()
 
-        fig_units = px.bar(weekly_ev, x='Label', y='Unit', color='Client Name',
-                           barmode='stack', template='plotly_white', height=380,
-                           title="Weekly EV Units Rented",
-                           labels={'Unit': 'Units'})
-        fig_units.update_layout(hovermode='x unified', xaxis_tickangle=-45,
-                                legend=dict(orientation='h', y=1.05))
-        st.plotly_chart(fig_units, use_container_width=True)
+# ── Cost structure breakdown ──────────────────────────────────────────────────
+st.subheader("Cost Structure by EV Client")
 
-    # ── Summary table ─────────────────────────────────────────────────────────
-    st.subheader("Summary Table")
-    if 'Client Name' in df.columns:
-        disp = client_agg.copy()
-        disp['Revenue']     = disp['Revenue'].apply(fmt_idr)
-        disp['Cost']        = disp['Cost'].apply(fmt_idr)
-        disp['GP']          = disp['GP'].apply(fmt_idr)
-        disp['GP Margin %'] = disp['GP Margin %'].apply(fmt_pct)
-        st.dataframe(disp, use_container_width=True, hide_index=True)
+cost_cols = [c for c in COST_COMPONENTS.keys() if c in df.columns]
+cost_agg  = df.groupby('Client Name', observed=True)[cost_cols].sum().reset_index()
+cost_long = cost_agg.melt(id_vars='Client Name', var_name='Component', value_name='Amount')
+cost_long['Label'] = cost_long['Component'].map(COST_COMPONENTS).fillna(cost_long['Component'])
+cost_long = cost_long[cost_long['Amount'] > 0]
 
-else:
-    # ── Fallback: EV clients from main data ────────────────────────────────────
-    st.info("Using EV Rental data from main Raw Data Source. For full EV metrics (OEM, Insurance, IoT), ensure the 'Test EV Rental' sheet is present in your file.")
-
-    df_main = require_data()
-    ev_df_main = df_main[df_main['Client Name'].str.contains('EV Rental', na=False)].copy()
-
-    if ev_df_main.empty:
-        st.warning("No EV Rental clients found in the data.")
-        st.stop()
-
-    ev_agg = (
-        ev_df_main.groupby('Client Name', observed=True)
-        .agg(Revenue=('Total Revenue', 'sum'), Cost=('Total Cost', 'sum'), GP=('GP', 'sum'))
-        .reset_index().sort_values('GP', ascending=False)
+if not cost_long.empty:
+    fig_cost = px.bar(
+        cost_long, x='Client Name', y='Amount', color='Label',
+        barmode='stack', template='plotly_white', height=380,
+        title="Cost Breakdown by EV Client",
+        labels={'Amount': 'IDR', 'Label': 'Cost Component'}
     )
-    ev_agg['GP Margin %'] = ev_agg.apply(
-        lambda r: r['GP'] / r['Revenue'] * 100 if r['Revenue'] else 0, axis=1
-    )
+    fig_cost.update_layout(hovermode='x unified', xaxis_tickangle=-20,
+                           legend=dict(orientation='h', y=1.05))
+    st.plotly_chart(fig_cost, use_container_width=True)
 
-    disp = ev_agg.copy()
-    disp['Revenue']     = disp['Revenue'].apply(fmt_idr)
-    disp['Cost']        = disp['Cost'].apply(fmt_idr)
-    disp['GP']          = disp['GP'].apply(fmt_idr)
-    disp['GP Margin %'] = disp['GP Margin %'].apply(fmt_pct)
-    st.dataframe(disp, use_container_width=True, hide_index=True)
+st.divider()
+
+# ── Weekly revenue trend ──────────────────────────────────────────────────────
+st.subheader("Weekly Revenue Trend")
+
+weekly_ev = (
+    df.groupby(['Year', 'Week (by Year)', 'Client Name'], observed=True)
+    .agg(Revenue=('Total Revenue', 'sum'), GP=('GP', 'sum'))
+    .reset_index()
+    .sort_values(['Year', 'Week (by Year)'])
+)
+weekly_ev['Label'] = (weekly_ev['Year'].astype(str) + ' W' +
+                      weekly_ev['Week (by Year)'].astype(str))
+
+tab1, tab2 = st.tabs(["Revenue", "Gross Profit"])
+
+with tab1:
+    fig_rev = px.bar(weekly_ev, x='Label', y='Revenue', color='Client Name',
+                     barmode='stack', template='plotly_white', height=380,
+                     title="Weekly EV Revenue by Client",
+                     labels={'Revenue': 'IDR'})
+    fig_rev.update_layout(hovermode='x unified', xaxis_tickangle=-45,
+                          legend=dict(orientation='h', y=1.05))
+    st.plotly_chart(fig_rev, use_container_width=True)
+
+with tab2:
+    fig_gp = px.bar(weekly_ev, x='Label', y='GP', color='Client Name',
+                    barmode='stack', template='plotly_white', height=380,
+                    title="Weekly EV Gross Profit by Client",
+                    labels={'GP': 'IDR'})
+    fig_gp.update_layout(hovermode='x unified', xaxis_tickangle=-45,
+                         legend=dict(orientation='h', y=1.05))
+    fig_gp.add_hline(y=0, line_dash='dash', line_color='red', opacity=0.5)
+    st.plotly_chart(fig_gp, use_container_width=True)
+
+st.divider()
+
+# ── Monthly YoY ───────────────────────────────────────────────────────────────
+st.subheader("Monthly Performance")
+
+monthly_ev = (
+    df.groupby(['Year', 'Month'], observed=True)
+    .agg(Revenue=('Total Revenue', 'sum'), Cost=('Total Cost', 'sum'), GP=('GP', 'sum'))
+    .reset_index()
+)
+monthly_ev['Month'] = pd.Categorical(monthly_ev['Month'], categories=MONTH_ORDER, ordered=True)
+monthly_ev = monthly_ev.sort_values(['Year', 'Month'])
+
+fig_m = px.bar(monthly_ev, x='Month', y='GP', color='Year',
+               barmode='group', template='plotly_white', height=360,
+               title="Monthly EV GP by Year",
+               labels={'GP': 'Gross Profit (IDR)'})
+fig_m.update_layout(hovermode='x unified', legend=dict(orientation='h', y=1.05))
+fig_m.add_hline(y=0, line_dash='dash', line_color='red', opacity=0.4)
+st.plotly_chart(fig_m, use_container_width=True)
