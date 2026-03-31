@@ -8,52 +8,52 @@ MONTH_ORDER = [
     'July', 'August', 'September', 'October', 'November', 'December'
 ]
 
+# Core financial columns (present in all file versions)
 REVENUE_COLS = [
-    'Selling Price (Regular Rate)',
-    'Additional Charge (KM, KG, Etc)',
-    'Return/Delivery Rate',
-    'Lalamove Bills (Invoicing to Client)',
-    'TOTAL DELIVERY REVENUE',
-    'EV Reduction (3PL & KSJ)',
-    'EV Manpower',
-    'EV Revenue + Battery (Rental Client)',
-    'Claim/COD/Own Risk',
-    'Hub, COD Fee (SBY) & Service Korlap',
-    'Other Revenue',
-    'Attribute Fee',
+    'Selling Price (Regular Rate)', 'Additional Charge (KM, KG, Etc)',
+    'Return/Delivery Rate', 'Lalamove Bills (Invoicing to Client)',
+    'TOTAL DELIVERY REVENUE', 'EV Reduction (3PL & KSJ)', 'EV Manpower',
+    'EV Revenue + Battery (Rental Client)', 'Claim/COD/Own Risk',
+    'Hub, COD Fee (SBY) & Service Korlap', 'Other Revenue', 'Attribute Fee',
     'Total Revenue',
 ]
 
 COST_COLS = [
-    'Rider Cost',
-    'Manpower Cost',
-    'OEM Cost',
-    'Mid-Mile/ Linehaul Cost',
-    'Add. 3PL Cost',
-    'DM Program',
-    'Claim Damaged/Loss',
-    'Outstanding COD',
-    'Claim Ownrisk',
-    'Attribute Cost',
-    'HUB Cost',
-    'Other Cost',
-    'Total Cost',
+    'Rider Cost', 'Manpower Cost', 'OEM Cost', 'Mid-Mile/ Linehaul Cost',
+    'Add. 3PL Cost', 'DM Program', 'Claim Damaged/Loss', 'Outstanding COD',
+    'Claim Ownrisk', 'Attribute Cost', 'HUB Cost', 'Other Cost', 'Total Cost',
 ]
 
 COST_COMPONENTS = {
-    'Rider Cost': 'Rider',
-    'Manpower Cost': 'Manpower',
-    'OEM Cost': 'OEM',
-    'Mid-Mile/ Linehaul Cost': 'Mid-Mile',
-    'Add. 3PL Cost': '3PL',
-    'DM Program': 'DM Program',
-    'HUB Cost': 'Hub',
-    'Other Cost': 'Other',
+    'Rider Cost': 'Rider', 'Manpower Cost': 'Manpower', 'OEM Cost': 'OEM',
+    'Mid-Mile/ Linehaul Cost': 'Mid-Mile', 'Add. 3PL Cost': '3PL',
+    'DM Program': 'DM Program', 'HUB Cost': 'Hub', 'Other Cost': 'Other',
+}
+
+# SLA / operational columns (present in W12+ exports)
+SLA_COLS = [
+    'Deliveries', 'Distance (KM)', '#Ontime', '#Late',
+    'Count of Courier Name (unique)', 'Courier Dedicated + Back Up',
+    'Deliveries2', 'Distance (KM)2', '#Ontime2', '#Late2',
+    'Count of Courier Name (unique)2', 'EV Deduction (from Riders)', 'Apps Using',
+]
+
+# Columns that are Excel helper/lookup data — ignore them
+# Columns AM/AN/AO (indices 38–40) are internal references; explicitly listed below.
+_IGNORE_SUFFIXES = ('.1',)
+_IGNORE_PREFIXES = ('Unnamed:',)
+_IGNORE_COLS = {
+    # Internal reference columns (AM=38, AN=39, AO=40 in the Raw Data Source sheet)
+    'Supporting Docs Rev', 'Supporting Docs Cost', 'Remarks',
+    # Excel lookup / dropdown helper columns
+    'Year.1', 'Client Names', 'Blitz Team.1', 'Client Level.1',
+    'Client Location.1', 'Week by Year', 'Month.1', 'Week by Month',
+    'Project Name', 'SLA Type.1', 'Project.1', 'Apps Using.1',
 }
 
 
 def _fix_week(w):
-    """Fix 2026 week numbers that have year appended (e.g. 12026 → 1, 102026 → 10)."""
+    """Fix 2026-style appended week numbers (e.g. 12026 → 1, 102026 → 10)."""
     if pd.isna(w):
         return np.nan
     w = int(w)
@@ -65,54 +65,80 @@ def _fix_week(w):
 
 
 def _detect_sheet(file_bytes: bytes) -> str:
-    """
-    Find the correct sheet to load.
-    Priority: 'Raw Data Source' → 'PowerQuery' → first sheet.
-    This allows uploading the full file OR just the Raw Data Source tab exported alone.
-    """
+    """Find the data sheet: prefer Raw Data Source, then PowerQuery, then first sheet."""
     xl = pd.ExcelFile(io.BytesIO(file_bytes))
     for candidate in ['Raw Data Source', 'PowerQuery']:
         if candidate in xl.sheet_names:
             return candidate
-    return xl.sheet_names[0]  # Fallback: use whatever sheet is there
+    return xl.sheet_names[0]
+
+
+def _clean_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Strip whitespace, drop known helper/duplicate columns."""
+    df.columns = [str(c).strip() for c in df.columns]
+    drop = [c for c in df.columns if
+            c in _IGNORE_COLS or
+            any(c.endswith(s) for s in _IGNORE_SUFFIXES) or
+            any(c.startswith(s) for s in _IGNORE_PREFIXES)]
+    return df.drop(columns=drop, errors='ignore')
 
 
 @st.cache_data(show_spinner="Loading data...")
 def load_main_data(file_bytes: bytes) -> pd.DataFrame:
     sheet = _detect_sheet(file_bytes)
     df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=0)
+    df = _clean_columns(df)
 
-    # Strip whitespace from column names (handles ' HUB Cost ' etc.)
-    df.columns = [str(c).strip() for c in df.columns]
+    # Numeric: core financial columns
+    for col in REVENUE_COLS + COST_COLS + ['Delivery Volume']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # Numeric: SLA columns (fill missing with 0)
+    for col in SLA_COLS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     # Fix week numbers
     df['Week (by Year)'] = df['Week (by Year)'].apply(_fix_week)
 
-    # Numeric columns – fill nulls with 0
-    numeric_cols = REVENUE_COLS + COST_COLS + ['Delivery Volume']
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    # Year as int — drop rows with no valid year, then convert
+    df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
+    df = df[df['Year'].notna()].copy()
+    df['Year'] = df['Year'].astype(int)
 
-    # Derived metrics
-    df['GP'] = df['Total Revenue'] - df['Total Cost']
-    df['GP Margin %'] = np.where(
-        df['Total Revenue'] != 0,
-        df['GP'] / df['Total Revenue'] * 100,
-        0
-    )
-    vol = df['Delivery Volume'].replace(0, np.nan)
-    df['SRPO'] = df['Selling Price (Regular Rate)'] / vol
-    df['RCPO'] = df['Rider Cost'] / vol
-    df['TCPO'] = df['Total Cost'] / vol
-    df['TRPO'] = df['Total Revenue'] / vol
-    df[['SRPO', 'RCPO', 'TCPO', 'TRPO']] = df[['SRPO', 'RCPO', 'TCPO', 'TRPO']].fillna(0)
-
-    # Ordered month category
+    # Month as ordered category
     df['Month'] = pd.Categorical(df['Month'], categories=MONTH_ORDER, ordered=True)
 
-    # Ensure Year is int
-    df['Year'] = pd.to_numeric(df['Year'], errors='coerce').dropna().astype(int)
+    # ── Derived financial metrics ─────────────────────────────────────────────
+    df['GP'] = df['Total Revenue'] - df['Total Cost']
+    df['GP Margin %'] = np.where(
+        df['Total Revenue'] != 0, df['GP'] / df['Total Revenue'] * 100, 0
+    )
+    vol = df['Delivery Volume'].replace(0, np.nan)
+    df['SRPO'] = (df['Selling Price (Regular Rate)'] / vol).fillna(0)
+    df['RCPO'] = (df['Rider Cost'] / vol).fillna(0)
+    df['TCPO'] = (df['Total Cost'] / vol).fillna(0)
+    df['TRPO'] = (df['Total Revenue'] / vol).fillna(0)
+
+    # ── Derived SLA metrics (if columns present) ──────────────────────────────
+    if '#Ontime' in df.columns and 'Deliveries' in df.columns:
+        # Combine dedicated + backup courier data
+        df['_total_deliveries'] = df['Deliveries'] + df.get('Deliveries2', pd.Series(0, index=df.index))
+        df['_total_ontime']     = df['#Ontime']    + df.get('#Ontime2',    pd.Series(0, index=df.index))
+        df['_total_late']       = df['#Late']      + df.get('#Late2',      pd.Series(0, index=df.index))
+        raw_otp = np.where(
+            df['_total_deliveries'] > 0,
+            df['_total_ontime'] / df['_total_deliveries'] * 100,
+            np.nan
+        )
+        # Cap at 100% — data entry anomalies can cause #Ontime > Deliveries
+        df['OTP Rate %'] = np.minimum(raw_otp, 100.0)
+    else:
+        df['_total_deliveries'] = df.get('Delivery Volume', 0)
+        df['_total_ontime']     = np.nan
+        df['_total_late']       = np.nan
+        df['OTP Rate %']        = np.nan
 
     return df
 
@@ -122,9 +148,8 @@ def load_ev_data(file_bytes: bytes) -> pd.DataFrame | None:
     try:
         df = pd.read_excel(io.BytesIO(file_bytes), sheet_name='Test EV Rental ', header=0)
         df.columns = [str(c).strip() for c in df.columns]
-        numeric_cols = ['Unit', 'EV Revenue + Battery (Rental Client)', 'Others',
-                        'Total Revenue', 'OEM Cost', 'Insurance Cost', 'IOT Cost', 'Total Cost']
-        for col in numeric_cols:
+        for col in ['Unit', 'EV Revenue + Battery (Rental Client)', 'Others',
+                    'Total Revenue', 'OEM Cost', 'Insurance Cost', 'IOT Cost', 'Total Cost']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         df['GP'] = df['Total Revenue'] - df['Total Cost']
@@ -137,26 +162,26 @@ def load_ev_data(file_bytes: bytes) -> pd.DataFrame | None:
 @st.cache_data(show_spinner=False)
 def load_action_items(file_bytes: bytes) -> pd.DataFrame | None:
     try:
-        df = pd.read_excel(
-            io.BytesIO(file_bytes),
-            sheet_name='Action Items',
-            header=1,
-            usecols=range(10)
-        )
+        df = pd.read_excel(io.BytesIO(file_bytes), sheet_name='Action Items',
+                           header=1, usecols=range(10))
         df.columns = [str(c).strip() for c in df.columns]
-        df = df.dropna(how='all')
-        return df
+        return df.dropna(how='all')
     except Exception:
         return None
 
 
+def get_latest_week(df: pd.DataFrame) -> tuple[int, int]:
+    """Return (year, week) of the most recent week in the data."""
+    max_year = int(df['Year'].max())
+    max_week = int(df[df['Year'] == max_year]['Week (by Year)'].max())
+    return max_year, max_week
+
+
 def generate_weekly_insights(df: pd.DataFrame) -> dict | None:
     """Compare the latest week to the prior week and surface key insights."""
-    max_year = int(df['Year'].max())
-    year_df = df[df['Year'] == max_year].copy()
-    max_week = int(year_df['Week (by Year)'].max())
+    max_year, max_week = get_latest_week(df)
     prev_week = max_week - 1
-
+    year_df = df[df['Year'] == max_year]
     curr = year_df[year_df['Week (by Year)'] == max_week]
     prev = year_df[year_df['Week (by Year)'] == prev_week]
 
@@ -168,34 +193,25 @@ def generate_weekly_insights(df: pd.DataFrame) -> dict | None:
 
     summary = {}
     for m in ['Total Revenue', 'Total Cost', 'GP', 'Delivery Volume']:
-        if m == 'GP':
-            cv = (curr['Total Revenue'] - curr['Total Cost']).sum()
-            pv = (prev['Total Revenue'] - prev['Total Cost']).sum()
-        else:
-            cv = curr[m].sum()
-            pv = prev[m].sum()
+        cv = (curr['Total Revenue'] - curr['Total Cost']).sum() if m == 'GP' else curr[m].sum()
+        pv = (prev['Total Revenue'] - prev['Total Cost']).sum() if m == 'GP' else prev[m].sum()
         summary[m] = {'current': cv, 'previous': pv, 'pct_change': pct(cv, pv)}
 
-    # Client GP comparison
     def client_gp(d):
-        return d.groupby('Client Name')[['Total Revenue', 'Total Cost']].sum().eval(
-            'GP = `Total Revenue` - `Total Cost`'
-        )[['GP']].reset_index()
+        return (d.groupby('Client Name')[['Total Revenue', 'Total Cost']].sum()
+                .eval('GP = `Total Revenue` - `Total Cost`')[['GP']].reset_index())
 
     curr_gp = client_gp(curr)
     prev_gp = client_gp(prev)
     merged = curr_gp.merge(prev_gp, on='Client Name', how='outer', suffixes=('', '_prev')).fillna(0)
     merged['GP_change'] = merged['GP'] - merged['GP_prev']
-    merged['GP_pct'] = merged.apply(
-        lambda r: pct(r['GP'], r['GP_prev']), axis=1
-    )
+    merged['GP_pct'] = merged.apply(lambda r: pct(r['GP'], r['GP_prev']), axis=1)
 
-    summary['week'] = max_week
-    summary['year'] = max_year
-    summary['date_range'] = curr['Date Range'].dropna().iloc[0] if not curr['Date Range'].dropna().empty else ''
-    summary['top_clients'] = curr_gp.nlargest(5, 'GP')
+    summary['week']            = max_week
+    summary['year']            = max_year
+    summary['date_range']      = curr['Date Range'].dropna().iloc[0] if not curr['Date Range'].dropna().empty else ''
+    summary['top_clients']     = curr_gp.nlargest(5, 'GP')
     summary['biggest_improvers'] = merged[merged['GP_pct'].notna() & (merged['GP_pct'] > 0)].nlargest(3, 'GP_pct')
     summary['biggest_decliners'] = merged[merged['GP_pct'].notna() & (merged['GP_pct'] < 0)].nsmallest(3, 'GP_pct')
-    summary['negative_gp'] = curr_gp[curr_gp['GP'] < 0]
-
+    summary['negative_gp']     = curr_gp[curr_gp['GP'] < 0]
     return summary
