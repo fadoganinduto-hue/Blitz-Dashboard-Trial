@@ -64,9 +64,23 @@ def _fix_week(w):
     return w
 
 
+def _detect_sheet(file_bytes: bytes) -> str:
+    """
+    Find the correct sheet to load.
+    Priority: 'Raw Data Source' → 'PowerQuery' → first sheet.
+    This allows uploading the full file OR just the Raw Data Source tab exported alone.
+    """
+    xl = pd.ExcelFile(io.BytesIO(file_bytes))
+    for candidate in ['Raw Data Source', 'PowerQuery']:
+        if candidate in xl.sheet_names:
+            return candidate
+    return xl.sheet_names[0]  # Fallback: use whatever sheet is there
+
+
 @st.cache_data(show_spinner="Loading data...")
 def load_main_data(file_bytes: bytes) -> pd.DataFrame:
-    df = pd.read_excel(io.BytesIO(file_bytes), sheet_name='Raw Data Source', header=0)
+    sheet = _detect_sheet(file_bytes)
+    df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=0)
 
     # Strip whitespace from column names (handles ' HUB Cost ' etc.)
     df.columns = [str(c).strip() for c in df.columns]
